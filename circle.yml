@@ -1,7 +1,5 @@
 ---
 machine:
-  node:
-    version: 8.6.0
   python:
     version: 2.7.11
 test:
@@ -9,7 +7,8 @@ test:
     - echo "Fake test!"
 deployment:
   release:
-    tag: /v[0-9]+(\.[0-9]+)*/
+    tag: /v\d+(\.\d+)*/
     commands:
-      - pip install -r scripts/requirememts-ci.txt
-      - ./scripts/github_release.py vis-$VERSION.tar.gz
+      - pip install -r scripts/requirements-ci.txt
+      - tar zcf scripts.tar.gz scripts
+      - ./scripts/github_release.py scripts.tar.gz

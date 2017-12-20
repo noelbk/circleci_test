@@ -1,2 +1,4 @@
-requests
-click
+click==6.7
+python-magic==0.4.15
+requests==2.18.4
+uritemplate==3.0.0

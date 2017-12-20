@@ -1,64 +1,107 @@
 #! /usr/bin/env python
 """
-github_release.py - upload files to a tagin a circleci build
+github_release.py - push release assets from CircleCI to GitHub
+
+Uses the GitHub v3 API:
+https://developer.github.com/v3/repos/releases/
+
+Add a deployment section to circle.yml in your repo
+https://circleci.com/docs/1.0/configuration/#tags
+
+     deployment:
+       release:
+         tag: /v\d+(\.\d+)*/
+         commands:
+           - pip install -r scripts/requirements-ci.txt
+           - tar zcf scripts.tar.gz scripts
+           - ./scripts/github_release.py scripts.tar.gz
+
+Make a personal access token in GitHub:
+https://github.com/settings/tokens
+
+Set the token as an environment variable in CircleCI
+https://circleci.com/gh/GH_USER/GH_REPO/edit#env-vars
+
+    GH_TOKEN <your_gh_token>
+
+CircleCI will make a new build and push the release assets to GitHub
+when you push a tag.
+
+    git commit
+    git tag v0.0.1
+    git push origin v0.0.1
+
 """
-# https://circleci.com/docs/1.0/configuration/#tags
-#
-# deployment:
-#   release:
-#     tag: /v[0-9]+(\.[0-9]+)*/
-#     commands:
-#       - npm pack
-#       - ./github_release.py vis-$VERSION.tar.gz
-#
-# https://circleci.com/docs/1.0/environment-variables/
 
 import requests
 import click
+import uritemplate
+import os
+import magic
+mime = magic.Magic(mime=True)
+
+
+def assert_response(r, expect_status, url):
+    assert r.status_code == expect_status, \
+           "unexpected response=%s expected=%s url=%s text=%s" \
+           % (r.status_code, expect_status, url, r.text)
+
 
 @click.command()
-@click.option("--gh_tag",   "-t", envvar='CIRCLE_TAG', required=True)
-@click.option("--gh_user",  "-u", envvar='CIRCLE_PROJECT_USERNAME', required=True)
-@click.option("--gh_repo",  "-r", envvar='CIRCLE_PROJECT_REPONAME', required=True)
-@click.option("--gh_token", "-k", envvar='GH_TOKEN', required=True)
+@click.option("--gh_token", "-k", required=True,
+              envvar='GH_TOKEN')
+@click.option("--gh_tag",   "-t", required=True,
+              envvar='CIRCLE_TAG')
+@click.option("--gh_user",  "-u", required=True,
+              envvar='CIRCLE_PROJECT_USERNAME')
+@click.option("--gh_repo",  "-r", required=True,
+              envvar='CIRCLE_PROJECT_REPONAME')
 @click.argument("filenames", nargs=-1, type=click.Path(exists=True))
-def main(gh_tag, gh_user, gh_repo, gh_token, filenames):
-    print(
-        " gh_tag=%(gh_tag)s"
-        " gh_user=%(gh_user)s"
-        " gh_repo=%(gh_repo)s"
-        " gh_token=%(gh_token)s"
-        " filenames=%(filenames)s"
-        % locals())
-    return    
-    
-    s = requests.Session()
-    s.headers.update({'Authorization': 'token %(gh_token)s' % locals()})
+def main(gh_token, gh_tag, gh_user, gh_repo, filenames):
+    gh_api_root = 'https://api.github.com'
+    sess = requests.Session()
+    sess.headers.update({'Authorization': 'token %(gh_token)s' % locals(),
+                         'Accept': 'application/vnd.github.v3+json'})
 
-    url = 'https://api.github.com/repos/%(gh_owner)s/$(gh_repo)s/releases/tags/%(gh_tag)s' % locals()
-    br = s.get(url)
-    assert r.status_code == 404, "tag already exists"
-    
-    url = 'https://api.github.com/repos/%(gh_owner)s/%(gh_repo)s/releases' % locals()
-    r = s.post(url, data={
-      "tag_name": gh_tag,
-      "target_commitish": "master",
-      "name": gh_tag,
-      "body": gh_tag,
-      "draft": false,
-      "prerelease": false
-    })
-    assert r.status_code == requests.codes.ok
+    url = ('%(gh_api_root)s'
+           '/repos/%(gh_user)s/%(gh_repo)s'
+           '/releases') % locals()
+    r = sess.post(url, json={
+        "tag_name": gh_tag,
+        "target_commitish": "master",
+        "name": gh_tag,
+        "body": gh_tag,
+        "draft": False,
+        "prerelease": False
+        })
+    if r.status_code == 422:
+        assert False, "tag already exists!  Delete it first to update it."
+    assert_response(r, 201, url)
     r = r.json()
     release_id = r['id']
     release_upload_url = r['upload_url']
 
-    for filename in filenames:
-        with open(filename, 'rb') as f:
-            url = 'https://%(release_upload_url)s/repos/%(gh_owner)s/%(gh_repo)/releases/%(release_id)s/assets?name=%(filename)s' % locals()
-            r = requests.post(url, data=f)
-            assert r.status_code == requests.codes.ok
+    try:
+        for filename in filenames:
+            content_type = mime.from_file(filename)
+            with open(filename, 'rb') as f:
+                name = os.path.basename(filename)
+                url = uritemplate.expand(release_upload_url, name=name)
+                r = sess.post(url, files={'file': (name, f, content_type)})
+                assert_response(r, 201, url)
+                r = r.json()
+                print("download_url: %s" % r['browser_download_url'])
+    except:
+        url = ('%(gh_api_root)s'
+               '/repos/%(gh_user)s/%(gh_repo)s'
+               '/releases/%(release_id)s') % locals()
+        r = sess.delete(url)
+        if r.status_code != 204:
+            print("WARNING: caught error but couldn't delete release."
+                  " response=%s url=%s text=%s"
+                  % (r.status_code, url, r.text))
+        raise
+
 
 if __name__ == '__main__':
     main()
-    
