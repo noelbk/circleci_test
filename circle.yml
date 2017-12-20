@@ -1,0 +1,15 @@
+---
+machine:
+  node:
+    version: 8.6.0
+  python:
+    version: 2.7.11
+test:
+  override:
+    - echo "Fake test!"
+deployment:
+  release:
+    tag: /v[0-9]+(\.[0-9]+)*/
+    commands:
+      - pip install -r scripts/requirememts-ci.txt
+      - ./scripts/github_release.py vis-$VERSION.tar.gz
